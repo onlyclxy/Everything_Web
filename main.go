@@ -38,6 +38,20 @@ type SearchResponse struct {
 	TotalPages int            `json:"totalPages"`
 }
 
+type BrowseResponse struct {
+	Results     []SearchResult `json:"results"`
+	Count       int            `json:"count"`
+	CurrentPath string         `json:"currentPath"`
+	ParentPath  string         `json:"parentPath"`
+	PathParts   []PathPart     `json:"pathParts"`
+	CanGoUp     bool           `json:"canGoUp"`
+}
+
+type PathPart struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
 // 搜索缓存结构
 type SearchCache struct {
 	Paths     []string
@@ -287,6 +301,7 @@ func main() {
 	http.HandleFunc("/transcode/", transcodeHandler)
 	http.HandleFunc("/thumbnail/", thumbnailHandler)
 	http.HandleFunc("/api/search", apiSearchHandler)
+	http.HandleFunc("/api/browse", apiBrowseHandler)
 	http.HandleFunc("/api/cache-status", cacheStatusHandler)
 	http.HandleFunc("/api/cache-clear", cacheClearHandler)
 	http.HandleFunc("/video/", videoPlayerHandler)
@@ -349,11 +364,32 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
             padding: 15px 0;
             letter-spacing: 3px;
         }
+        .mode-indicator { 
+            font-size: 14px; 
+            color: #666; 
+            margin-top: -10px; 
+            font-weight: 400; 
+            text-align: center; 
+            transition: color 0.3s ease; 
+        }
+        .mode-indicator.browse-mode { 
+            color: #2196F3; 
+            font-weight: 500; 
+        }
         .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
         .search-input { flex: 1; padding: 12px; border: 2px solid #ddd; border-radius: 6px; font-size: 16px; }
         .search-input:focus { outline: none; border-color: #4CAF50; }
         .search-btn { padding: 12px 24px; background: #4CAF50; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
         .search-btn:hover { background: #45a049; }
+        .path-bar { margin-top: 15px; }
+        .path-input-container { display: flex; gap: 10px; align-items: center; }
+        .path-label { font-weight: 500; color: #666; min-width: 50px; }
+        .path-input { flex: 1; padding: 12px; border: 2px solid #ddd; border-radius: 6px; font-size: 16px; }
+        .path-input:focus { outline: none; border-color: #4CAF50; }
+        .path-btn { padding: 12px 20px; background: #4CAF50; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
+        .path-btn:hover { background: #45a049; }
+        .path-btn-secondary { padding: 12px 20px; background: #666; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
+        .path-btn-secondary:hover { background: #555; }
         .search-options { display: flex; gap: 20px; align-items: center; margin-bottom: 10px; }
         .search-options label { font-size: 14px; color: #666; }
         .search-options select, .search-options input { padding: 5px; border: 1px solid #ddd; border-radius: 4px; }
@@ -399,6 +435,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
         <div class="header">
             <div class="logo-container" onclick="resetSearch()">
                 <h1 class="logo">Everything Web Server</h1>
+                <div class="mode-indicator" id="modeIndicator">🔍 搜索模式</div>
             </div>
             <div class="search-options">
                 <label>每页显示：
@@ -413,6 +450,16 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
             <div class="search-box">
                 <input type="text" class="search-input" id="searchInput" placeholder="搜索文件和文件夹..." autocomplete="off">
                 <button class="search-btn" onclick="performSearch()">搜索</button>
+            </div>
+            
+            <!-- 路径栏 -->
+            <div class="path-bar" id="pathBar" style="display: none;">
+                <div class="path-input-container">
+                    <span class="path-label">📂 路径:</span>
+                    <input type="text" class="path-input" id="pathInput" placeholder="输入文件夹路径，如: C:\Users" autocomplete="off">
+                    <button class="path-btn" onclick="navigateToPath()">进入</button>
+                    <button class="path-btn-secondary" onclick="togglePathBar()">取消</button>
+                </div>
             </div>
         </div>
         
@@ -439,10 +486,37 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
         let currentPage = 1;
         let currentQuery = '';
         let totalPages = 1;
+        let currentMode = 'search'; // 'search' 或 'browse'
+        let currentPath = '';
+        let browseHistory = []; // 浏览历史
         
         document.getElementById('searchInput').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 performSearch();
+            }
+        });
+        
+        // 为搜索框添加点击时的智能行为
+        document.getElementById('searchInput').addEventListener('focus', function() {
+            if (currentMode === 'browse') {
+                // 如果当前在浏览模式，提示用户可以搜索
+                if (this.value === '') {
+                    this.placeholder = '输入关键词搜索，或按Esc返回浏览...';
+                }
+            }
+        });
+        
+        document.getElementById('searchInput').addEventListener('blur', function() {
+            // 恢复默认占位符
+            this.placeholder = '搜索文件和文件夹...';
+        });
+        
+        document.getElementById('searchInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && currentMode === 'browse') {
+                // 按Esc键时，如果在浏览模式且搜索框为空，则保持浏览模式
+                if (this.value === '') {
+                    this.blur();
+                }
             }
         });
         
@@ -465,8 +539,18 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
             
             if (!query.trim()) return;
             
+            // 切换到搜索模式
+            currentMode = 'search';
             currentQuery = query;
             currentPage = page;
+            currentPath = '';
+            
+            // 更新模式指示器
+            updateModeIndicator();
+            
+            // 隐藏面包屑导航
+            const breadcrumbContainer = document.getElementById('breadcrumb');
+            if (breadcrumbContainer) breadcrumbContainer.style.display = 'none';
             
             resultsContainer.innerHTML = '<div class="loading">搜索中...</div>';
             if (searchStats) searchStats.style.display = 'none';
@@ -746,10 +830,256 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
             console.log('搜索已重置');
         }
         
-        function browseFolder(path) {
-            // 这里可以实现文件夹浏览功能
-            alert('文件夹浏览功能待实现: ' + path);
+        async function browseFolder(path) {
+            console.log('浏览文件夹:', path);
+            
+            // 清空搜索框并切换到浏览模式
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.value = '';
+            }
+            
+            currentMode = 'browse';
+            currentPath = path;
+            currentQuery = '';
+            
+            // 更新模式指示器
+            updateModeIndicator();
+            
+            // 添加到浏览历史
+            if (browseHistory.length === 0 || browseHistory[browseHistory.length - 1] !== path) {
+                browseHistory.push(path);
+            }
+            
+            const resultsContainer = document.getElementById('results');
+            const searchStats = document.getElementById('searchStats');
+            const cacheInfo = document.getElementById('cacheInfo');
+            const pagination = document.getElementById('pagination');
+            const breadcrumb = document.getElementById('breadcrumb');
+            
+            // 显示加载中
+            if (resultsContainer) resultsContainer.innerHTML = '<div class="loading">加载文件夹内容...</div>';
+            if (searchStats) searchStats.style.display = 'none';
+            if (cacheInfo) cacheInfo.style.display = 'none';
+            if (pagination) pagination.style.display = 'none';
+            
+            const startTime = Date.now();
+            
+            try {
+                const response = await fetch('/api/browse?path=' + encodeURIComponent(path));
+                
+                if (!response.ok) {
+                    throw new Error('浏览请求失败: ' + response.status);
+                }
+                
+                const data = await response.json();
+                const endTime = Date.now();
+                const responseTime = endTime - startTime;
+                
+                displayBrowseResults(data, responseTime);
+            } catch (error) {
+                console.error('浏览错误:', error);
+                if (resultsContainer) {
+                    resultsContainer.innerHTML = '<div class="no-results">浏览失败: ' + error.message + '</div>';
+                }
+                if (searchStats) searchStats.style.display = 'none';
+                if (cacheInfo) cacheInfo.style.display = 'none';
+                if (pagination) pagination.style.display = 'none';
+            }
         }
+        
+        function displayBrowseResults(data, responseTime) {
+            const container = document.getElementById('results');
+            const statsContainer = document.getElementById('searchStats');
+            const cacheContainer = document.getElementById('cacheInfo');
+            const breadcrumbContainer = document.getElementById('breadcrumb');
+            const paginationContainer = document.getElementById('pagination');
+            
+            // 检查DOM元素是否存在
+            if (!container || !statsContainer || !cacheContainer || !breadcrumbContainer) {
+                console.error('页面DOM元素缺失');
+                return;
+            }
+            
+            // 显示面包屑导航
+            displayBreadcrumb(data);
+            
+            // 显示文件夹信息
+            cacheContainer.innerHTML = '📁 文件夹浏览 (' + responseTime + 'ms) - 当前位置: ' + data.currentPath;
+            cacheContainer.className = 'cache-info';
+            cacheContainer.style.display = 'block';
+            
+            // 显示文件夹统计
+            statsContainer.innerHTML = '找到 <strong>' + data.count + '</strong> 个项目';
+            statsContainer.style.display = 'block';
+            
+            // 隐藏分页（文件夹浏览不需要分页）
+            if (paginationContainer) paginationContainer.style.display = 'none';
+            
+            // 检查data和data.results是否存在
+            if (!data || !data.results || data.results.length === 0) {
+                container.innerHTML = '<div class="no-results">此文件夹为空</div>';
+                return;
+            }
+            
+            // 显示结果
+            let html = '';
+            
+            // 如果可以返回上级，添加返回上级按钮
+            if (data.canGoUp && data.parentPath) {
+                html += '<div class="result-item">';
+                html += '<div class="file-icon folder">↩️</div>';
+                html += '<div class="file-info">';
+                html += '<div class="file-name" onclick="browseFolder(\'' + data.parentPath.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\')">..</div>';
+                html += '<div class="file-meta">返回上级目录</div>';
+                html += '</div>';
+                html += '<div class="file-actions">';
+                html += '<button class="btn btn-primary" onclick="browseFolder(\'' + data.parentPath.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\')">进入</button>';
+                html += '</div>';
+                html += '</div>';
+            }
+            
+            // 先显示文件夹，再显示文件
+            data.results.sort((a, b) => {
+                if (a.isDir && !b.isDir) return -1;
+                if (!a.isDir && b.isDir) return 1;
+                return a.name.localeCompare(b.name, 'zh-CN');
+            });
+            
+            data.results.forEach(file => {
+                if (!file || !file.path) {
+                    return;
+                }
+                
+                const icon = getFileIcon(file);
+                const size = formatFileSize(file.size || 0);
+                const actions = getFileActions(file);
+                const fileName = file.name || '未知文件';
+                const fileType = file.type || 'file';
+                
+                html += '<div class="result-item">';
+                html += icon;
+                html += '<div class="file-info">';
+                html += '<div class="file-name" onclick="handleFileClick(\'' + file.path.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\', \'' + fileType + '\', \'' + fileName.replace(/'/g, "\\'") + '\')">' + fileName + '</div>';
+                html += '<div class="file-meta">' + file.path + ' • ' + size + ' • ' + (file.modified || '') + '</div>';
+                html += '</div>';
+                html += '<div class="file-actions">';
+                html += actions;
+                html += '</div>';
+                html += '</div>';
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        function displayBreadcrumb(data) {
+            const breadcrumbContainer = document.getElementById('breadcrumb');
+            if (!breadcrumbContainer || !data.pathParts) {
+                return;
+            }
+            
+            let html = '<span style="margin-right: 10px;">📍 当前位置:</span>';
+            
+            data.pathParts.forEach((part, index) => {
+                if (index > 0) {
+                    html += ' / ';
+                }
+                
+                // 如果是当前路径，不加链接
+                if (part.path === data.currentPath) {
+                    html += '<strong>' + part.name + '</strong>';
+                } else {
+                    html += '<a href="#" onclick="browseFolder(\'' + part.path.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\')">' + part.name + '</a>';
+                }
+            });
+            
+            // 添加回到搜索和输入路径的按钮
+            html += ' <button style="margin-left: 15px; padding: 4px 8px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;" onclick="togglePathBar()">输入路径</button>';
+            html += ' <button style="margin-left: 5px; padding: 4px 8px; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px;" onclick="resetToSearch()">回到搜索</button>';
+            
+            breadcrumbContainer.innerHTML = html;
+            breadcrumbContainer.style.display = 'block';
+        }
+        
+        function resetToSearch() {
+            currentMode = 'search';
+            currentPath = '';
+            currentQuery = '';
+            browseHistory = [];
+            
+            // 更新模式指示器
+            updateModeIndicator();
+            
+            const breadcrumbContainer = document.getElementById('breadcrumb');
+            const searchInput = document.getElementById('searchInput');
+            
+            if (breadcrumbContainer) breadcrumbContainer.style.display = 'none';
+            if (searchInput) searchInput.focus();
+            
+            resetSearch();
+        }
+        
+        function updateModeIndicator() {
+            const indicator = document.getElementById('modeIndicator');
+            if (!indicator) return;
+            
+            if (currentMode === 'browse') {
+                indicator.textContent = '📁 浏览模式 - ' + (currentPath.length > 50 ? '...' + currentPath.slice(-50) : currentPath);
+                indicator.className = 'mode-indicator browse-mode';
+            } else {
+                indicator.textContent = '🔍 搜索模式';
+                indicator.className = 'mode-indicator';
+            }
+        }
+        
+        function togglePathBar() {
+            const pathBar = document.getElementById('pathBar');
+            const pathInput = document.getElementById('pathInput');
+            
+            if (pathBar.style.display === 'none') {
+                pathBar.style.display = 'block';
+                if (pathInput) {
+                    pathInput.value = currentPath || '';
+                    pathInput.focus();
+                    pathInput.select();
+                }
+            } else {
+                pathBar.style.display = 'none';
+            }
+        }
+        
+        function navigateToPath() {
+            const pathInput = document.getElementById('pathInput');
+            if (!pathInput) return;
+            
+            const path = pathInput.value.trim();
+            if (!path) {
+                alert('请输入有效的文件夹路径');
+                return;
+            }
+            
+            // 隐藏路径栏
+            const pathBar = document.getElementById('pathBar');
+            if (pathBar) pathBar.style.display = 'none';
+            
+            // 浏览指定路径
+            browseFolder(path);
+        }
+        
+        // 为路径输入框添加回车键支持
+        document.addEventListener('DOMContentLoaded', function() {
+            const pathInput = document.getElementById('pathInput');
+            if (pathInput) {
+                pathInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        navigateToPath();
+                    }
+                    if (e.key === 'Escape') {
+                        togglePathBar();
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>`
@@ -2469,4 +2799,132 @@ func transcodeHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Printf("ffmpeg转码成功完成: %s", filePath)
 	}
+}
+
+// 文件夹浏览API处理器
+func apiBrowseHandler(w http.ResponseWriter, r *http.Request) {
+	folderPath := r.URL.Query().Get("path")
+	if folderPath == "" {
+		http.Error(w, "路径参数不能为空", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("文件夹浏览请求: path=%s, IP=%s", folderPath, r.RemoteAddr)
+
+	// 检查路径是否存在且为目录
+	fileInfo, err := os.Stat(folderPath)
+	if os.IsNotExist(err) {
+		log.Printf("文件夹不存在: %s", folderPath)
+		http.Error(w, "文件夹不存在", http.StatusNotFound)
+		return
+	}
+
+	if !fileInfo.IsDir() {
+		log.Printf("路径不是文件夹: %s", folderPath)
+		http.Error(w, "路径不是文件夹", http.StatusBadRequest)
+		return
+	}
+
+	// 读取文件夹内容
+	entries, err := os.ReadDir(folderPath)
+	if err != nil {
+		log.Printf("读取文件夹失败: %s, 错误: %v", folderPath, err)
+		http.Error(w, "读取文件夹失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var results []SearchResult
+	for _, entry := range entries {
+		entryPath := filepath.Join(folderPath, entry.Name())
+
+		// 获取详细信息
+		info, err := entry.Info()
+		if err != nil {
+			log.Printf("获取文件信息失败: %s, 跳过", entryPath)
+			continue
+		}
+
+		result := SearchResult{
+			Name:     entry.Name(),
+			Path:     entryPath,
+			Size:     info.Size(),
+			Modified: info.ModTime().Format("2006-01-02 15:04:05"),
+			IsDir:    entry.IsDir(),
+		}
+
+		// 确定文件类型
+		if result.IsDir {
+			result.Type = "folder"
+		} else {
+			ext := strings.ToLower(filepath.Ext(entry.Name()))
+			switch ext {
+			case ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm":
+				result.Type = "video"
+			case ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp":
+				result.Type = "image"
+			default:
+				result.Type = "file"
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	// 生成路径部分用于面包屑导航
+	pathParts := generatePathParts(folderPath)
+
+	// 获取父目录路径
+	parentPath := filepath.Dir(folderPath)
+	canGoUp := folderPath != filepath.VolumeName(folderPath) && parentPath != folderPath
+
+	response := BrowseResponse{
+		Results:     results,
+		Count:       len(results),
+		CurrentPath: folderPath,
+		ParentPath:  parentPath,
+		PathParts:   pathParts,
+		CanGoUp:     canGoUp,
+	}
+
+	log.Printf("文件夹浏览完成: %s, 返回%d个项目", folderPath, len(results))
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(response)
+}
+
+// 生成路径部分用于面包屑导航
+func generatePathParts(fullPath string) []PathPart {
+	var parts []PathPart
+
+	// 清理路径并分割
+	cleanPath := filepath.Clean(fullPath)
+
+	// 获取盘符（Windows）
+	volume := filepath.VolumeName(cleanPath)
+	if volume != "" {
+		parts = append(parts, PathPart{
+			Name: volume + "\\",
+			Path: volume + "\\",
+		})
+		cleanPath = cleanPath[len(volume)+1:] // 移除盘符部分
+	}
+
+	// 分割剩余路径
+	if cleanPath != "" && cleanPath != "." {
+		pathElements := strings.Split(cleanPath, string(os.PathSeparator))
+		currentPath := volume + "\\"
+
+		for _, element := range pathElements {
+			if element == "" {
+				continue
+			}
+			currentPath = filepath.Join(currentPath, element)
+			parts = append(parts, PathPart{
+				Name: element,
+				Path: currentPath,
+			})
+		}
+	}
+
+	return parts
 }
