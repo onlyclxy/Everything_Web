@@ -302,9 +302,12 @@ func main() {
 	http.HandleFunc("/thumbnail/", thumbnailHandler)
 	http.HandleFunc("/api/search", apiSearchHandler)
 	http.HandleFunc("/api/browse", apiBrowseHandler)
+	http.HandleFunc("/api/text", textPreviewHandler)
 	http.HandleFunc("/api/cache-status", cacheStatusHandler)
 	http.HandleFunc("/api/cache-clear", cacheClearHandler)
 	http.HandleFunc("/video/", videoPlayerHandler)
+	http.HandleFunc("/imageview/", imageViewerHandler)
+	http.HandleFunc("/textview/", textViewerHandler)
 
 	// 启动服务器
 	port := "8080"
@@ -412,6 +415,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
         .btn { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; text-decoration: none; display: inline-block; }
         .btn-primary { background: #4CAF50; color: white; }
         .btn-secondary { background: #ddd; color: #333; }
+        .btn-info { background: #2196F3; color: white; }
         .btn:hover { opacity: 0.8; }
         .loading { text-align: center; padding: 40px; color: #666; }
         .no-results { text-align: center; padding: 40px; color: #666; }
@@ -746,15 +750,54 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
             const ext = file.name.toLowerCase().split('.').pop();
             let actions = '<a href="/file/' + encodeURIComponent(file.path) + '?download=1" class="btn btn-secondary" download>下载</a>';
             
+            // 视频文件
             if (['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm'].includes(ext)) {
                 actions = '<a href="/video/' + encodeURIComponent(file.path) + '" class="btn btn-primary" target="_blank">播放</a> ' + actions;
             }
-            
-            if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
-                actions = '<button class="btn btn-primary" onclick="showImagePreview(\'' + file.path.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\')">预览</button> <a href="/file/' + encodeURIComponent(file.path) + '" class="btn btn-secondary" target="_blank">新窗口</a> ' + actions;
+            // 图片文件
+            else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
+                let encodedPath = encodeURIComponent(file.path)
+                    .replace(/'/g, '%27').replace(/\(/g, '%28').replace(/\)/g, '%29')
+                    .replace(/%5C/g, '%5C'); // 确保反斜杠被编码
+                actions = '<button class="btn btn-primary" onclick="showImagePreview(\'' + file.path.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\')">预览</button> <a href="/imageview/' + encodedPath + '" class="btn btn-info" target="_blank">新窗口</a> ' + actions;
+            }
+            // 文本文件
+            else if (isTextFile(ext)) {
+                let encodedPath = encodeURIComponent(file.path)
+                    .replace(/'/g, '%27').replace(/\(/g, '%28').replace(/\)/g, '%29')
+                    .replace(/%5C/g, '%5C'); // 确保反斜杠被编码
+                actions = '<button class="btn btn-primary" onclick="showTextPreview(\'' + file.path.replace(/'/g, "\\'").replace(/\\/g, "\\\\") + '\')">预览</button> <a href="/textview/' + encodedPath + '" class="btn btn-info" target="_blank">新窗口</a> ' + actions;
             }
             
             return actions;
+        }
+        
+        // 检查是否为文本文件
+        function isTextFile(ext) {
+            const textExts = [
+                // 基本文本文件
+                'txt', 'log', 'md', 'readme', 'conf', 'config', 'ini', 'cfg',
+                // 编程语言文件
+                'c', 'cpp', 'cc', 'cxx', 'h', 'hpp', 'hxx', 'cs', 'vb', 'fs',
+                'java', 'kt', 'scala', 'groovy', 'js', 'ts', 'jsx', 'tsx', 'mjs', 'cjs',
+                'py', 'pyw', 'pyi', 'pyx', 'pxd', 'rb', 'rake', 'php', 'phtml',
+                'go', 'mod', 'sum', 'rs', 'toml', 'swift', 'm', 'mm', 'lua',
+                'pl', 'pm', 't', 'sh', 'bash', 'zsh', 'fish', 'bat', 'cmd', 'ps1',
+                'r', 'rmd', 'matlab',
+                // 标记语言和数据格式
+                'html', 'htm', 'xhtml', 'xml', 'xsl', 'xsd', 'json', 'jsonc',
+                'yaml', 'yml', 'css', 'scss', 'sass', 'less', 'styl',
+                'sql', 'mysql', 'psql', 'sqlite',
+                // 配置和脚本文件
+                'dockerfile', 'dockerignore', 'gitignore', 'gitattributes',
+                'makefile', 'mk', 'cmake', 'ninja', 'gradle', 'maven', 'pom', 'ant',
+                'properties', 'env', 'htaccess',
+                // 其他常见文本格式
+                'csv', 'tsv', 'sv', 'tex', 'bib', 'vim', 'vimrc', 'emacs',
+                'reg', 'inf', 'desktop'
+            ];
+            
+            return textExts.includes(ext);
         }
         
         function formatFileSize(bytes) {
@@ -775,8 +818,14 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
             } else if (type === 'image') {
                 showImagePreview(path);
             } else {
-                // 其他文件类型，在新窗口中打开
-                window.open('/file/' + encodeURIComponent(path), '_blank');
+                // 检查是否为文本文件
+                const ext = name.toLowerCase().split('.').pop();
+                if (isTextFile(ext)) {
+                    showTextPreview(path);
+                } else {
+                    // 其他文件类型，在新窗口中打开
+                    window.open('/file/' + encodeURIComponent(path), '_blank');
+                }
             }
         }
         
@@ -798,6 +847,122 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
         
         function closeImagePreview() {
             document.getElementById('imageOverlay').style.display = 'none';
+        }
+        
+        // 文本预览功能
+        async function showTextPreview(path) {
+            console.log('文本预览请求:', path);
+            
+            try {
+                const response = await fetch('/api/text?path=' + encodeURIComponent(path));
+                
+                if (!response.ok) {
+                    throw new Error('文本预览请求失败: ' + response.status);
+                }
+                
+                const data = await response.json();
+                displayTextPreview(data);
+            } catch (error) {
+                console.error('文本预览错误:', error);
+                alert('文本预览失败: ' + error.message);
+            }
+        }
+        
+        // 显示文本预览弹窗
+        function displayTextPreview(data) {
+            // 创建预览弹窗
+            const overlay = document.createElement('div');
+            overlay.id = 'textPreviewOverlay';
+            overlay.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 2000; display: flex; justify-content: center; align-items: center; cursor: pointer;';
+            
+            const previewContainer = document.createElement('div');
+            previewContainer.style.cssText = 'background: #1e1e1e; border-radius: 8px; max-width: 90%; max-height: 90%; display: flex; flex-direction: column; overflow: hidden; cursor: default;';
+            
+            // 预览内容截取（显示前500行）
+            const lines = data.content.split('\n');
+            const previewLines = lines.slice(0, 500);
+            const isLongFile = lines.length > 500;
+            const previewContent = previewLines.join('\n');
+            
+            previewContainer.innerHTML = '<div style="padding: 20px; border-bottom: 1px solid #333; color: white;">' +
+                '<div style="display: flex; justify-content: space-between; align-items: center;">' +
+                    '<div>' +
+                        '<h3 style="color: #4FC3F7; margin: 0 0 5px 0;">' + data.name + '</h3>' +
+                        '<div style="font-size: 12px; color: #888;">' +
+                            '大小: ' + formatFileSize(data.size) + ' • ' +
+                            '行数: ' + data.lines + ' • ' +
+                            '编码: ' + data.encoding +
+                            (isLongFile ? ' • 预览前500行' : '') +
+                        '</div>' +
+                    '</div>' +
+                    '<div>' +
+                        '<button onclick="openTextInNewWindow(\'' + data.path.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + '\')" ' +
+                                'style="padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">' +
+                            '新窗口' +
+                        '</button>' +
+                        '<button onclick="closeTextPreview()" ' +
+                                'style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">' +
+                            '关闭' +
+                        '</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="flex: 1; overflow: auto; padding: 20px; white-space: pre-wrap; font-family: monospace; font-size: 13px; color: #d4d4d4; line-height: 1.4; word-break: break-word; background: #1e1e1e;" id="previewContent">' + escapeHtml(previewContent) + '</div>' +
+            (isLongFile ? '<div style="padding: 10px 20px; background: #333; color: #ccc; text-align: center; font-size: 12px;">文件较长，仅显示前500行。点击"新窗口"查看完整内容。</div>' : '');
+            
+            // 预览模式不需要行号，只显示内容即可
+            
+            overlay.appendChild(previewContainer);
+            document.body.appendChild(overlay);
+            
+            // 点击背景关闭
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) {
+                    closeTextPreview();
+                }
+            });
+            
+            // 阻止内容区域点击冒泡
+            previewContainer.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+            
+            // 添加ESC键关闭功能
+            document.addEventListener('keydown', function escHandler(e) {
+                if (e.key === 'Escape') {
+                    closeTextPreview();
+                    document.removeEventListener('keydown', escHandler);
+                }
+            });
+        }
+        
+        // 关闭文本预览
+        function closeTextPreview() {
+            const overlay = document.getElementById('textPreviewOverlay');
+            if (overlay) {
+                overlay.remove();
+            }
+        }
+        
+        // 在新窗口中打开文本文件（正确处理URL编码）
+        function openTextInNewWindow(filePath) {
+            // 完整URL编码，包括反斜杠
+            let encodedPath = encodeURIComponent(filePath);
+            // 确保特殊字符都被正确编码
+            encodedPath = encodedPath.replace(/'/g, '%27')
+                                     .replace(/\(/g, '%28')
+                                     .replace(/\)/g, '%29')
+                                     .replace(/%5C/g, '%5C'); // 确保反斜杠编码
+            const url = '/textview/' + encodedPath;
+            console.log('打开新窗口:', url);
+            window.open(url, '_blank');
+        }
+        
+        // HTML转义函数
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
         
         function resetSearch() {
@@ -1121,9 +1286,14 @@ func videoPlayerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 检查文件是否存在
 	fileInfo, err := os.Stat(filePath)
-	if os.IsNotExist(err) {
-		log.Printf("视频文件不存在: %s", filePath)
-		http.Error(w, "视频文件不存在", http.StatusNotFound)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("视频文件不存在: %s", filePath)
+			http.Error(w, "视频文件不存在", http.StatusNotFound)
+		} else {
+			log.Printf("访问视频文件失败: %s, 错误: %v", filePath, err)
+			http.Error(w, "访问文件失败: "+err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -2140,9 +2310,14 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 检查文件是否存在
 	fileInfo, err := os.Stat(filePath)
-	if os.IsNotExist(err) {
-		log.Printf("文件不存在: %s", filePath)
-		http.Error(w, "文件不存在", http.StatusNotFound)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("文件不存在: %s", filePath)
+			http.Error(w, "文件不存在", http.StatusNotFound)
+		} else {
+			log.Printf("访问文件失败: %s, 错误: %v", filePath, err)
+			http.Error(w, "访问文件失败: "+err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -2244,9 +2419,14 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 检查文件是否存在
 	fileInfo, err := os.Stat(filePath)
-	if os.IsNotExist(err) {
-		log.Printf("视频文件不存在: %s", filePath)
-		http.Error(w, "文件不存在", http.StatusNotFound)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("视频文件不存在: %s", filePath)
+			http.Error(w, "文件不存在", http.StatusNotFound)
+		} else {
+			log.Printf("访问视频文件失败: %s, 错误: %v", filePath, err)
+			http.Error(w, "访问文件失败: "+err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -2927,4 +3107,718 @@ func generatePathParts(fullPath string) []PathPart {
 	}
 
 	return parts
+}
+
+// 文本预览API处理器
+func textPreviewHandler(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		http.Error(w, "路径参数不能为空", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("文本预览请求: path=%s, IP=%s", filePath, r.RemoteAddr)
+
+	// 检查文件是否存在
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("文本文件不存在: %s", filePath)
+			http.Error(w, "文件不存在", http.StatusNotFound)
+		} else {
+			log.Printf("访问文本文件失败: %s, 错误: %v", filePath, err)
+			http.Error(w, "访问文件失败: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if fileInfo.IsDir() {
+		http.Error(w, "不能预览文件夹", http.StatusBadRequest)
+		return
+	}
+
+	// 检查文件大小，避免读取过大的文件
+	const maxFileSize = 10 * 1024 * 1024 // 10MB
+	if fileInfo.Size() > maxFileSize {
+		http.Error(w, "文件过大，无法预览", http.StatusBadRequest)
+		return
+	}
+
+	// 读取文件内容
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("读取文本文件失败: %s, 错误: %v", filePath, err)
+		http.Error(w, "读取文件失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 检测文件编码并转换为UTF-8
+	contentStr := detectAndConvertEncoding(content)
+
+	response := map[string]interface{}{
+		"path":     filePath,
+		"name":     filepath.Base(filePath),
+		"size":     fileInfo.Size(),
+		"modified": fileInfo.ModTime().Format("2006-01-02 15:04:05"),
+		"content":  contentStr,
+		"lines":    len(strings.Split(contentStr, "\n")),
+		"encoding": detectEncoding(content),
+	}
+
+	log.Printf("文本预览成功: %s, 大小: %d字节, 行数: %d", filePath, fileInfo.Size(), response["lines"])
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(response)
+}
+
+// 检测文件编码并转换为UTF-8
+func detectAndConvertEncoding(data []byte) string {
+	// 简单的编码检测和转换
+	// 1. 首先检查是否已经是有效的UTF-8
+	if isValidUTF8(data) {
+		return string(data)
+	}
+
+	// 2. 尝试GBK编码（中文Windows常用）
+	if gbkStr := tryGBKDecode(data); gbkStr != "" {
+		return gbkStr
+	}
+
+	// 3. 作为Latin-1处理（兼容ASCII）
+	return string(data)
+}
+
+// 检测编码类型
+func detectEncoding(data []byte) string {
+	if isValidUTF8(data) {
+		return "UTF-8"
+	}
+	if tryGBKDecode(data) != "" {
+		return "GBK"
+	}
+	return "Unknown"
+}
+
+// 检查是否为有效的UTF-8编码
+func isValidUTF8(data []byte) bool {
+	return len(data) > 0 && strings.ToValidUTF8(string(data), "�") == string(data)
+}
+
+// 尝试GBK解码
+func tryGBKDecode(data []byte) string {
+	// 这里是简化版本，实际项目中可以使用 golang.org/x/text/encoding 包
+	// 由于避免引入外部依赖，这里做简单处理
+
+	// 检查是否可能是GBK编码（简单检测）
+	hasHighByte := false
+	for _, b := range data {
+		if b > 127 {
+			hasHighByte = true
+			break
+		}
+	}
+
+	if !hasHighByte {
+		// 如果没有高位字节，直接作为ASCII处理
+		return string(data)
+	}
+
+	// 简化的GBK处理，实际应该使用专门的编码库
+	return ""
+}
+
+// 图片查看器页面处理器
+func imageViewerHandler(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Path[11:] // 去掉 "/imageview/" 前缀
+
+	// 多次URL解码以确保正确处理
+	for i := 0; i < 3; i++ {
+		if decoded, err := url.QueryUnescape(filePath); err == nil {
+			filePath = decoded
+		} else {
+			break
+		}
+	}
+
+	// 替换正斜杠为反斜杠（Windows路径）
+	filePath = strings.ReplaceAll(filePath, "/", "\\")
+
+	log.Printf("图片查看器请求: %s，来源IP: %s", filePath, r.RemoteAddr)
+
+	// 检查文件是否存在
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("图片文件不存在: %s", filePath)
+			http.Error(w, "图片文件不存在", http.StatusNotFound)
+		} else {
+			log.Printf("访问图片文件失败: %s, 错误: %v", filePath, err)
+			http.Error(w, "访问文件失败: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// 检查是否为图片文件
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if !isImageFile(ext) {
+		log.Printf("非图片文件: %s", filePath)
+		http.Error(w, "不是图片文件", http.StatusBadRequest)
+		return
+	}
+
+	fileName := filepath.Base(filePath)
+	fileSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+
+	tmpl := `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片查看器 - ` + fileName + `</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #000; color: white; overflow: hidden; }
+        .container { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: rgba(0,0,0,0.8); padding: 15px 20px; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; backdrop-filter: blur(10px); }
+        .header-content { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; }
+        .image-info { flex: 1; }
+        .image-title { font-size: 16px; font-weight: 500; margin-bottom: 5px; word-break: break-all; }
+        .image-meta { font-size: 12px; color: #ccc; word-break: break-all; }
+        .controls { display: flex; gap: 10px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; font-size: 14px; }
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-secondary { background: #666; color: white; }
+        .btn:hover { opacity: 0.8; }
+        .image-container { 
+            flex: 1; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            padding-top: 80px;
+            position: relative;
+        }
+        .image-display { 
+            max-width: calc(100vw - 40px); 
+            max-height: calc(100vh - 120px); 
+            object-fit: contain; 
+            cursor: zoom-in;
+            transition: transform 0.3s ease;
+        }
+        .image-display.zoomed { 
+            cursor: zoom-out; 
+            transform: scale(2); 
+        }
+        .status-bar { 
+            position: fixed; 
+            bottom: 0; 
+            left: 0; 
+            right: 0; 
+            background: rgba(0,0,0,0.8); 
+            padding: 10px 20px; 
+            text-align: center; 
+            font-size: 12px; 
+            color: #ccc;
+            backdrop-filter: blur(10px);
+        }
+        .loading { 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            font-size: 16px; 
+        }
+        @media (max-width: 768px) {
+            .header-content { flex-direction: column; gap: 10px; text-align: center; }
+            .image-title { font-size: 14px; }
+            .image-meta { font-size: 11px; }
+            .btn { padding: 6px 12px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <div class="image-info">
+                    <div class="image-title">` + fileName + `</div>
+                    <div class="image-meta">文件大小: ` + fmt.Sprintf("%.2f MB", fileSizeMB) + ` • 路径: ` + filePath + `</div>
+                </div>
+                <div class="controls">
+                    <a href="/file/` + url.QueryEscape(filePath) + `?download=1" class="btn btn-primary" download>下载图片</a>
+                    <button class="btn btn-secondary" onclick="window.close()">关闭窗口</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="image-container">
+            <div class="loading" id="loading">加载中...</div>
+            <img class="image-display" id="imageDisplay" src="/file/` + url.QueryEscape(filePath) + `" 
+                 alt="` + fileName + `" 
+                 onload="imageLoaded()" 
+                 onerror="imageError()"
+                 onclick="toggleZoom()"
+                 style="display: none;">
+        </div>
+        
+        <div class="status-bar" id="statusBar">
+            点击图片可以放大/缩小 • 使用ESC键关闭窗口
+        </div>
+    </div>
+
+    <script>
+        let isZoomed = false;
+        
+        function imageLoaded() {
+            const img = document.getElementById('imageDisplay');
+            const loading = document.getElementById('loading');
+            const statusBar = document.getElementById('statusBar');
+            
+            loading.style.display = 'none';
+            img.style.display = 'block';
+            
+            // 显示图片信息
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
+            const displayWidth = img.clientWidth;
+            const displayHeight = img.clientHeight;
+            
+            statusBar.innerHTML = '原始尺寸: ' + naturalWidth + ' × ' + naturalHeight + ' • 显示尺寸: ' + displayWidth + ' × ' + displayHeight + ' • 点击放大/缩小 • ESC键关闭';
+            
+            console.log('图片加载完成:', '` + filePath + `', naturalWidth + 'x' + naturalHeight);
+        }
+        
+        function imageError() {
+            const loading = document.getElementById('loading');
+            loading.innerHTML = '图片加载失败';
+            console.error('图片加载失败:', '` + filePath + `');
+        }
+        
+        function toggleZoom() {
+            const img = document.getElementById('imageDisplay');
+            isZoomed = !isZoomed;
+            
+            if (isZoomed) {
+                img.classList.add('zoomed');
+            } else {
+                img.classList.remove('zoomed');
+            }
+        }
+        
+        // 键盘事件处理
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                window.close();
+            }
+            if (e.key === ' ' || e.key === 'Enter') {
+                e.preventDefault();
+                toggleZoom();
+            }
+        });
+        
+        // 阻止右键菜单（可选）
+        document.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+        });
+        
+        console.log('图片查看器初始化完成:', '` + fileName + `');
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(tmpl))
+}
+
+// 文本查看器页面处理器
+func textViewerHandler(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Path[10:] // 去掉 "/textview/" 前缀
+
+	// 多次URL解码以确保正确处理
+	for i := 0; i < 3; i++ {
+		if decoded, err := url.QueryUnescape(filePath); err == nil {
+			filePath = decoded
+		} else {
+			break
+		}
+	}
+
+	// 替换正斜杠为反斜杠（Windows路径）
+	filePath = strings.ReplaceAll(filePath, "/", "\\")
+
+	log.Printf("文本查看器请求: %s，来源IP: %s", filePath, r.RemoteAddr)
+
+	// 检查文件是否存在
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("文本文件不存在: %s", filePath)
+			http.Error(w, "文本文件不存在", http.StatusNotFound)
+		} else {
+			log.Printf("访问文件失败: %s, 错误: %v", filePath, err)
+			http.Error(w, "访问文件失败: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if fileInfo.IsDir() {
+		http.Error(w, "不能查看文件夹", http.StatusBadRequest)
+		return
+	}
+
+	// 检查文件是否为文本文件
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if !isTextFile(ext) {
+		log.Printf("非文本文件: %s", filePath)
+		http.Error(w, "不是文本文件", http.StatusBadRequest)
+		return
+	}
+
+	fileName := filepath.Base(filePath)
+	fileSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+
+	// 检查文件大小
+	const maxFileSize = 10 * 1024 * 1024 // 10MB
+	if fileInfo.Size() > maxFileSize {
+		http.Error(w, "文件过大，无法查看", http.StatusBadRequest)
+		return
+	}
+
+	// 读取文件内容
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("读取文本文件失败: %s, 错误: %v", filePath, err)
+		http.Error(w, "读取文件失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// 检测编码并转换
+	contentStr := detectAndConvertEncoding(content)
+	encoding := detectEncoding(content)
+	lines := strings.Split(contentStr, "\n")
+	lineCount := len(lines)
+
+	// 获取语法高亮的语言类型
+	language := getLanguageFromExtension(ext)
+
+	// 转义HTML内容
+	escapedContent := escapeHtml(contentStr)
+
+	tmpl := `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文本查看器 - ` + fileName + `</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Consolas', 'Monaco', 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; line-height: 1.5; }
+        .container { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: rgba(30, 30, 30, 0.95); padding: 15px 20px; border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 1000; }
+        .header-content { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; }
+        .file-info { flex: 1; }
+        .file-title { font-size: 16px; font-weight: 500; margin-bottom: 5px; color: #4FC3F7; word-break: break-all; }
+        .file-meta { font-size: 12px; color: #888; display: flex; gap: 20px; flex-wrap: wrap; }
+        .controls { display: flex; gap: 10px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; font-size: 14px; }
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-secondary { background: #666; color: white; }
+        .btn-info { background: #2196F3; color: white; }
+        .btn:hover { opacity: 0.8; }
+        .content-container { flex: 1; overflow: hidden; }
+        .content-area { 
+            flex: 1; 
+            overflow: auto; 
+            padding: 20px; 
+            white-space: pre-wrap; 
+            font-size: 14px;
+            word-break: break-word;
+        }
+        .status-bar { 
+            background: #007ACC; 
+            color: white; 
+            padding: 8px 20px; 
+            text-align: center; 
+            font-size: 12px; 
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .language-info { font-weight: 500; }
+        .search-box { 
+            position: fixed; 
+            top: 70px; 
+            right: 20px; 
+            background: #333; 
+            padding: 10px; 
+            border-radius: 4px; 
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        .search-input { 
+            padding: 6px 10px; 
+            border: 1px solid #555; 
+            background: #2d2d2d; 
+            color: white; 
+            border-radius: 3px; 
+            font-size: 14px;
+        }
+        .search-input:focus { outline: none; border-color: #007ACC; }
+        .highlight { background-color: yellow; color: black; }
+        
+        @media (max-width: 768px) {
+            .header-content { flex-direction: column; gap: 10px; }
+            .file-meta { font-size: 11px; gap: 10px; }
+            .btn { padding: 6px 12px; font-size: 12px; }
+            .content-area { padding: 15px; font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <div class="file-info">
+                    <div class="file-title">` + fileName + `</div>
+                    <div class="file-meta">
+                        <span>大小: ` + fmt.Sprintf("%.2f MB", fileSizeMB) + `</span>
+                        <span>行数: ` + strconv.Itoa(lineCount) + `</span>
+                        <span>编码: ` + encoding + `</span>
+                        <span>语言: ` + language + `</span>
+                    </div>
+                </div>
+                <div class="controls">
+                    <button class="btn btn-info" onclick="toggleSearch()">搜索</button>
+                    <button class="btn btn-secondary" onclick="selectAll()">全选</button>
+                    <a href="/file/` + url.QueryEscape(filePath) + `?download=1" class="btn btn-primary" download>下载</a>
+                    <button class="btn btn-secondary" onclick="window.close()">关闭</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="search-box" id="searchBox">
+            <input type="text" class="search-input" id="searchInput" placeholder="输入搜索内容..." onkeyup="performSearch()" oninput="performSearch()">
+        </div>
+        
+        <div class="content-container">
+            <div class="content-area" id="contentArea">` + escapedContent + `</div>
+        </div>
+        
+        <div class="status-bar">
+            <div class="language-info">` + language + ` • ` + encoding + `</div>
+            <div>` + filePath + `</div>
+            <div>` + strconv.Itoa(lineCount) + ` 行 • ` + fmt.Sprintf("%.2f MB", fileSizeMB) + `</div>
+        </div>
+    </div>
+
+    <script>
+        const originalContent = document.getElementById('contentArea').textContent;
+        const lines = originalContent.split('\n');
+        const lineCount = lines.length;
+        
+        // 行号功能已移除，专注于内容显示
+        
+        // 切换搜索框
+        function toggleSearch() {
+            const searchBox = document.getElementById('searchBox');
+            const searchInput = document.getElementById('searchInput');
+            
+            if (searchBox.style.display === 'none' || !searchBox.style.display) {
+                searchBox.style.display = 'block';
+                searchInput.focus();
+            } else {
+                searchBox.style.display = 'none';
+                clearHighlight();
+            }
+        }
+        
+        // 执行搜索
+        function performSearch() {
+            const searchInput = document.getElementById('searchInput');
+            const contentArea = document.getElementById('contentArea');
+            const query = searchInput.value.trim();
+            
+            if (!query) {
+                clearHighlight();
+                return;
+            }
+            
+            if (query.length < 2) return;
+            
+            // 清除之前的高亮并添加新高亮
+            const regex = new RegExp(escapeRegExp(query), 'gi');
+            const highlightedContent = originalContent.replace(regex, '<span class="highlight">$&</span>');
+            contentArea.innerHTML = highlightedContent;
+        }
+        
+        // 清除高亮
+        function clearHighlight() {
+            const contentArea = document.getElementById('contentArea');
+            contentArea.textContent = originalContent;
+        }
+        
+        // 全选文本
+        function selectAll() {
+            const contentArea = document.getElementById('contentArea');
+            const range = document.createRange();
+            range.selectNodeContents(contentArea);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+        
+        // 转义正则表达式特殊字符
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+        
+        // 键盘快捷键
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const searchBox = document.getElementById('searchBox');
+                if (searchBox.style.display === 'block') {
+                    toggleSearch();
+                } else {
+                    window.close();
+                }
+            }
+            if (e.ctrlKey && e.key === 'f') {
+                e.preventDefault();
+                toggleSearch();
+            }
+            if (e.ctrlKey && e.key === 'a') {
+                e.preventDefault();
+                selectAll();
+            }
+        });
+        
+        // 初始化
+        window.onload = function() {
+            console.log('文本查看器初始化完成:', '` + fileName + `', lineCount + ' 行');
+        };
+        
+        // 滚动功能已简化
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(tmpl))
+}
+
+// 检查是否为文本文件
+func isTextFile(ext string) bool {
+	textExts := []string{
+		// 基本文本文件
+		".txt", ".log", ".md", ".readme", ".conf", ".config", ".ini", ".cfg",
+		// 编程语言文件
+		".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx",
+		".cs", ".vb", ".fs",
+		".java", ".kt", ".scala", ".groovy",
+		".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+		".py", ".pyw", ".pyi", ".pyx", ".pxd",
+		".rb", ".rake", ".gemfile",
+		".php", ".phtml", ".php3", ".php4", ".php5", ".phps",
+		".go", ".mod", ".sum",
+		".rs", ".toml",
+		".swift", ".m", ".mm",
+		".lua", ".pl", ".pm", ".t",
+		".sh", ".bash", ".zsh", ".fish", ".bat", ".cmd", ".ps1",
+		".r", ".R", ".rmd",
+		".matlab", ".m",
+		// 标记语言和数据格式
+		".html", ".htm", ".xhtml", ".xml", ".xsl", ".xsd",
+		".json", ".jsonc", ".yaml", ".yml", ".toml",
+		".css", ".scss", ".sass", ".less", ".styl",
+		".sql", ".mysql", ".psql", ".sqlite",
+		// 配置和脚本文件
+		".dockerfile", ".dockerignore", ".gitignore", ".gitattributes",
+		".makefile", ".mk", ".cmake", ".ninja",
+		".gradle", ".maven", ".pom", ".ant",
+		".properties", ".env", ".htaccess",
+		// 其他常见文本格式
+		".csv", ".tsv", ".sv", ".tex", ".bib",
+		".vim", ".vimrc", ".emacs",
+		".reg", ".inf", ".desktop",
+	}
+
+	for _, textExt := range textExts {
+		if ext == textExt {
+			return true
+		}
+	}
+
+	// 检查无扩展名的常见文件名
+	fileName := strings.ToLower(filepath.Base(ext))
+	commonTextFiles := []string{
+		"makefile", "dockerfile", "jenkinsfile", "vagrantfile",
+		"readme", "license", "changelog", "authors", "contributors",
+		"install", "news", "todo", "copying", "manifest",
+	}
+
+	for _, name := range commonTextFiles {
+		if fileName == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// 根据文件扩展名获取语言类型
+func getLanguageFromExtension(ext string) string {
+	languageMap := map[string]string{
+		".c":   "C",
+		".cpp": "C++", ".cc": "C++", ".cxx": "C++",
+		".h": "C/C++", ".hpp": "C++", ".hxx": "C++",
+		".cs":    "C#",
+		".vb":    "Visual Basic",
+		".fs":    "F#",
+		".java":  "Java",
+		".kt":    "Kotlin",
+		".scala": "Scala",
+		".js":    "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+		".ts":  "TypeScript",
+		".jsx": "React", ".tsx": "React",
+		".py": "Python", ".pyw": "Python", ".pyi": "Python",
+		".rb":  "Ruby",
+		".php": "PHP", ".phtml": "PHP",
+		".go":    "Go",
+		".rs":    "Rust",
+		".swift": "Swift",
+		".lua":   "Lua",
+		".pl":    "Perl", ".pm": "Perl",
+		".sh": "Shell", ".bash": "Bash", ".zsh": "Zsh",
+		".bat": "Batch", ".cmd": "Batch",
+		".ps1": "PowerShell",
+		".r":   "R", ".R": "R",
+		".html": "HTML", ".htm": "HTML", ".xhtml": "HTML",
+		".xml": "XML", ".xsl": "XML", ".xsd": "XML",
+		".css": "CSS", ".scss": "SCSS", ".sass": "Sass", ".less": "Less",
+		".json": "JSON", ".jsonc": "JSON",
+		".yaml": "YAML", ".yml": "YAML",
+		".toml": "TOML",
+		".sql":  "SQL", ".mysql": "SQL", ".psql": "SQL",
+		".md":  "Markdown",
+		".log": "Log",
+		".txt": "Text",
+		".ini": "INI", ".cfg": "Config", ".conf": "Config",
+		".dockerfile": "Dockerfile",
+		".makefile":   "Makefile", ".mk": "Makefile",
+	}
+
+	if lang, exists := languageMap[ext]; exists {
+		return lang
+	}
+
+	return "Text"
+}
+
+// HTML转义函数
+func escapeHtml(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&#x27;")
+	return s
 }
